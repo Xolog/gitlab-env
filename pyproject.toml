@@ -1,19 +1,22 @@
-[tool.poetry]
+[project]
 name = "gitlab-env"
 version = "0.2.0"
 description = "Tool to get/set variables for given Gitlab project"
-authors = ["Eugene Aryapov <e.aryapov@oom.ag>", "Stan Bogatkin <s@sbog.ru>"]
+authors = [
+    { name = "Eugene Aryapov", email = "e.aryapov@oom.ag" },
+    { name = "Stan Bogatkin", email = "s@sbog.ru" }
+]
 readme = "README.md"
+dependencies = [
+    "python-gitlab ==3.15.0",
+    "GitPython ==3.1.35"
+]
+requires-python = ">=3.8"
+
 packages = [{include = "gitlab_env"}]
 
-[tool.poetry.dependencies]
-python = "^3.8"
-python-gitlab = "3.15.0"
-GitPython = "3.1.35"
-
-[tool.poetry.scripts]
+[project.scripts]
 gitlab-env = "gitlab_env.gitlab_ci_env:main"
-
 
 [build-system]
 requires = ["poetry-core"]
