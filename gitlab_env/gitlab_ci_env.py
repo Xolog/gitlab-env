@@ -5,9 +5,14 @@ from git import Repo
 
 class GitlabProject:
     def __init__(self, url, path, vars_file):
+        '''
+        Create Gitlab instanse.
+        "keep_base_url=True" needs to resolve warning:
+        "UserWarning: The base URL in the server response differs from the user-provided base URL (https://gitlab.example.com -> http://gitlab.example.com)."
+        '''
         self.gl = gitlab.Gitlab(url, private_token=os.environ['GITLAB_TOKEN'], keep_base_url=True)
-        self.project = self.gl.projects.get(path, lazy=True)                        # Create project's object
-        self.project_variables = self.project.variables.list(get_all=True)          # Get variables
+        self.project = self.gl.projects.get(path, lazy=True)                          # Create project's object
+        self.project_variables = self.project.variables.list(get_all=True)            # Get variables
         self.vars_dict = {}
         self.parse_dict = {}
         self.vars_file = vars_file
@@ -77,7 +82,7 @@ class GitlabProject:
             print()
 
     def print_envs(self):
-        print('List of environment scopes:')
+        print('List of environment scopes: ')
         for env in self.vars_dict:
             print(env)
 
@@ -174,9 +179,9 @@ class GitlabProject:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-f', '--file', type=str, default='.gitlab-ci-variables.yml')
-    parser.add_argument('-e', '--envs', nargs='+', help='Choose environment scope(s)', type=str)
-    parser.add_argument('-g', '--get', help='Fetch variables from GitLab.', action='store_true')
-    parser.add_argument('-p', '--push', help='Push variables to GitLab.', action='store_true')
+    parser.add_argument('-e', '--envs', nargs='+', help='Choose environment scope (Try --list before).', type=str)
+    parser.add_argument('-g', '--get', help='Fetch variables from gitlab.', action='store_true')
+    parser.add_argument('-p', '--push', help='Push variables to gitlab.', action='store_true')
     parser.add_argument('--force', help='Force push (delete vars not in file)', action='store_true')
     parser.add_argument('-l', '--list', help='List environment scopes.', action='store_true')
 
