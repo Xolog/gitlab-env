@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 import gitlab, os, re, argparse, sys, yaml
 from git import Repo
 
@@ -6,23 +6,24 @@ from git import Repo
 class GitlabProject:
     def __init__(self, url, path, vars_file):
         self.gl = gitlab.Gitlab(url, private_token=os.environ['GITLAB_TOKEN'], keep_base_url=True)
-        self.project = self.gl.projects.get(path, lazy=True)
-        self.project_variables = self.project.variables.list(get_all=True)
+        self.project = self.gl.projects.get(path, lazy=True)                        # Create project's object
+        self.project_variables = self.project.variables.list(get_all=True)          # Get variables
         self.vars_dict = {}
         self.parse_dict = {}
         self.vars_file = vars_file
 
     def gen_vars_dict(self):
-        for var in self.project_variables:
-            scope = var.environment_scope
+        for variable in self.project_variables:                                  # Create dict of environment scopes
+            scope = variable.environment_scope
+            
             if scope not in self.vars_dict:
                 self.vars_dict[scope] = {}
-            self.vars_dict[scope][var.key] = {
-                'value': var.value,
-                'type': var.variable_type,
-                'protected': var.protected,
-                'masked': var.masked,
-                'raw': var.raw
+            self.vars_dict[scope][variable.key] = {
+                'value': variable.value,
+                'type': variable.variable_type,
+                'protected': variable.protected,
+                'masked': variable.masked,
+                'raw': variable.raw
             }
 
     def gen_varfile_yaml(self):
