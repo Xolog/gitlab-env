@@ -1,142 +1,183 @@
-#!/usr/bin/python3
-import gitlab, os, re, argparse, sys
+#!/usr/bin/env python3
+import gitlab, os, re, argparse, sys, yaml
 from git import Repo
 
-class GitlabProject():
+
+class GitlabProject:
     def __init__(self, url, path, vars_file):
-        '''
-        Create Gitlab instanse.
-        "keep_base_url=True" needs to resolve warning:
-        "UserWarning: The base URL in the server response differs from the user-provided base URL (https://gitlab.example.com -> http://gitlab.example.com)."
-        '''
-        self.gl = gitlab.Gitlab(url, private_token=os.environ['GITLAB_TOKEN'],  keep_base_url=True)
-        self.project = self.gl.projects.get(path, lazy=True)                          # Create project's object
-        self.project_variables = self.project.variables.list(get_all=True)            # Get variables
+        self.gl = gitlab.Gitlab(url, private_token=os.environ['GITLAB_TOKEN'], keep_base_url=True)
+        self.project = self.gl.projects.get(path, lazy=True)
+        self.project_variables = self.project.variables.list(get_all=True)
         self.vars_dict = {}
         self.parse_dict = {}
         self.vars_file = vars_file
 
     def gen_vars_dict(self):
-        for variable in self.project_variables:                                  # Create dict of environment scopes
-            self.vars_dict.update({variable.environment_scope:{}})
+        for var in self.project_variables:
+            scope = var.environment_scope
+            if scope not in self.vars_dict:
+                self.vars_dict[scope] = {}
+            self.vars_dict[scope][var.key] = {
+                'value': var.value,
+                'type': var.variable_type,
+                'protected': var.protected,
+                'masked': var.masked,
+                'raw': var.raw
+            }
 
-        for env_scope in self.vars_dict:                                         # Filling environment scopes by key:value
-            for variable in self.project_variables:
-                if variable.environment_scope == env_scope:
-                    self.vars_dict[env_scope].update({variable.key:variable.value})
+    def gen_varfile_yaml(self):
+        output = {'environments': self.vars_dict}
+        with open(self.vars_file, 'w', encoding='utf-8') as f:
+            yaml.safe_dump(output, f,
+                           default_flow_style=False,
+                           allow_unicode=True,
+                           sort_keys=False,
+                           explicit_start=True,
+                           width=1000)
+        print(f'Variables written to: {self.vars_file}')
 
-    def gen_varfile_json(self):
-        with open(self.vars_file, 'w') as f:
-            for env in self.vars_dict:
-                f.write('###  Environment scope: "{env_scope}" ###\n'.format(env_scope = env))
-                tmp_lines = []
-                for var in self.vars_dict[env]:
-                    f.write('# {key}: "{value}"\n'.format(key = var, value = self.vars_dict[env][var]))
-                f.write(''.join(tmp_lines))
-                f.write('\n')
-        print('Variables are written to the file: "{file}".'.format(file = self.vars_file))
+    def parse_varfile_yaml(self, force=False):
+        with open(self.vars_file, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+
+        raw_envs = data.get('environments', {})
+        self.parse_dict = {}
+
+        for scope, variables in raw_envs.items():
+            self.parse_dict[scope] = {}
+            for key, val in variables.items():
+                if isinstance(val, dict):
+                    self.parse_dict[scope][key] = {
+                        'value': val.get('value'),
+                        'type': val.get('type', 'env_var'),
+                        'protected': val.get('protected', False),
+                        'masked': val.get('masked', False),
+                        'raw': val.get('raw', False)
+                    }
+                else:
+                    self.parse_dict[scope][key] = {
+                        'value': val,
+                        'type': 'env_var',
+                        'protected': False,
+                        'masked': False,
+                        'raw': False
+                    }
+
+        if not force:
+            for env in list(self.vars_dict.keys()):
+                if env not in self.parse_dict:
+                    del self.vars_dict[env]
 
     def print_stdout_json(self):
         for env in self.vars_dict:
-            print('###  Environment scope: "{env_scope}" ###'.format(env_scope = env))
-            tmp_lines = []
-            for var in self.vars_dict[env]:
-                re_expression = re.findall(" \${[0-9A-Z_]*}", self.vars_dict[env][var])
-                if len(re_expression) > 0:
-                    tmp_lines.append('# {key}: "{value}"'.format(key = var, value = self.vars_dict[env][var]))
-                    continue
-                print('# {key}: "{value}"'.format(key = var, value = self.vars_dict[env][var]))
-            print(''.join(tmp_lines))
-            print('')
+            print(f'###  Environment scope: "{env}" ###')
+            for key, meta in self.vars_dict[env].items():
+                print(f'# {key}: "{meta["value"]}"')
+            print()
 
     def print_envs(self):
-        print('List of environment scopes: ')
+        print('List of environment scopes:')
         for env in self.vars_dict:
             print(env)
 
     def select_envs(self, envs):
-        del_list = []
-        for env in self.vars_dict:
-            if env not in envs:
-                del_list.append(env)
+        del_list = [env for env in self.vars_dict if env not in envs]
         for env in del_list:
             del self.vars_dict[env]
-            print('Env "%s" deleted from output.' % env)
-        print('')
-
-    def parse_varfile_json(self, force=False):
-        var_re = ''
-        del_list = []
-        with open(self.vars_file, 'r') as f:
-            for line in f.readlines():
-                env_re = re.findall('Environment scope: "(.*)"', line)
-                var_re = re.findall('([a-zA-Z_].*): "(.*)"', line)
-                if 'Environment scope:' in line:
-                    self.parse_dict.update({env_re[0]:{}})
-                    env_scope = env_re[0]
-                else:
-                    vars = dict((key, value) for key, value in var_re)
-                    self.parse_dict[env_scope].update(vars)
-        if not force:                                  # If env isn't exist in "self.parse_dict" (vars from file)
-            for env in self.vars_dict:                             # remove it from "self.vars_dict" (vars from gitlab)
-                if env not in self.parse_dict:                     # for take effect (create, update, delete)
-                    del_list.append(env)                      # only to variables existing in  "self.parse_dict"
-            for env in del_list:
-                del self.vars_dict[env]
+            print(f'Env "{env}" deleted from output.')
+        print()
 
     def gen_push_list(self):
         push_list = []
-        if self.vars_dict == self.parse_dict:
-            print('No changes found.')
-        else:
-            for env_scope in self.parse_dict:
-                for variable in self.parse_dict[env_scope]:
-                    if (env_scope not in self.vars_dict) or (variable not in self.vars_dict[env_scope]):
-                        push_list.append({'key': variable,
-                                          'value': self.parse_dict[env_scope][variable],
-                                          'environment_scope': env_scope,
-                                          'action':'create'})
 
-                    elif (variable in self.vars_dict[env_scope]) and (self.vars_dict[env_scope][variable] != self.parse_dict[env_scope][variable]):
-                        push_list.append({'key': variable,
-                                          'value': self.parse_dict[env_scope][variable],
-                                          'environment_scope': env_scope,
-                                          'action':'update'})
+        for env_scope in self.parse_dict:
+            for key, parsed_var in self.parse_dict[env_scope].items():
+                parsed_value = parsed_var['value']
+                parsed_type = parsed_var.get('type', 'env_var')
+                parsed_protected = parsed_var.get('protected', False)
+                parsed_masked = parsed_var.get('masked', False)
+                parsed_raw = parsed_var.get('raw', False)
 
-            for env_scope in self.vars_dict:
-                for variable in self.vars_dict[env_scope]:
-                    if (env_scope not in self.parse_dict):
-                        push_list.append({'key': variable,
-                                          'environment_scope': env_scope,
-                                          'action':'delete'})
+                existing = self.vars_dict.get(env_scope, {}).get(key)
 
-                    elif (variable in self.vars_dict[env_scope]) and (variable not in self.parse_dict[env_scope]):
-                        push_list.append({'key': variable,
-                                          'environment_scope': env_scope,
-                                          'action':'delete'})
+                if not existing:
+                    push_list.append({
+                        'key': key,
+                        'value': parsed_value,
+                        'variable_type': parsed_type,
+                        'environment_scope': env_scope,
+                        'protected': parsed_protected,
+                        'masked': parsed_masked,
+                        'raw': parsed_raw,
+                        'action': 'create'
+                    })
+                else:
+                    if (
+                        existing['value'] != parsed_value or
+                        existing.get('type', 'env_var') != parsed_type or
+                        existing.get('protected', False) != parsed_protected or
+                        existing.get('masked', False) != parsed_masked or
+                        existing.get('raw', False) != parsed_raw
+                    ):
+                        push_list.append({
+                            'key': key,
+                            'value': parsed_value,
+                            'variable_type': parsed_type,
+                            'environment_scope': env_scope,
+                            'protected': parsed_protected,
+                            'masked': parsed_masked,
+                            'raw': parsed_raw,
+                            'action': 'update'
+                        })
+
+        for env_scope in self.vars_dict:
+            for key in self.vars_dict[env_scope]:
+                if env_scope not in self.parse_dict or key not in self.parse_dict[env_scope]:
+                    push_list.append({
+                        'key': key,
+                        'environment_scope': env_scope,
+                        'action': 'delete'
+                    })
+
         return push_list
 
     def push_vars(self, push_list):
         for i in push_list:
             if i['action'] == 'create':
-                self.project.variables.create({'key': i['key'], 'value': i['value'], 'environment_scope': i['environment_scope']})
-                print('Created: %s' % i)
+                self.project.variables.create({
+                    'key': i['key'],
+                    'value': i['value'],
+                    'variable_type': i.get('variable_type', 'env_var'),
+                    'environment_scope': i['environment_scope'],
+                    'protected': i.get('protected', False),
+                    'masked': i.get('masked', False),
+                    'raw': i.get('raw', False)
+                })
+                print('Created:', i)
+
             elif i['action'] == 'update':
-                self.project.variables.update(i['key'], {'value': i['value']}, filter={'environment_scope': i['environment_scope']})
-                print('Updated: %s' % i)
+                self.project.variables.update(i['key'], {
+                    'value': i['value'],
+                    'variable_type': i.get('variable_type', 'env_var'),
+                    'protected': i.get('protected', False),
+                    'masked': i.get('masked', False),
+                    'raw': i.get('raw', False)
+                }, filter={'environment_scope': i['environment_scope']})
+                print('Updated:', i)
+
             elif i['action'] == 'delete':
                 self.project.variables.delete(i['key'], filter={'environment_scope': i['environment_scope']})
-                print('Deleted: %s' % i)
+                print('Deleted:', i)
+
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-f', '--file', type=str, default='.gitlab-ci-local-variables.yml')
-    parser.add_argument('-e', '--envs', nargs='+', help='Choose environment scope (Try --list before).', type=str)
-    parser.add_argument('-g', '--get', help='Fetch variables from gitlab.', action='store_true')
-    parser.add_argument('-p', '--push', help='Push variables to gitlab.', action='store_true')
-    parser.add_argument('--force', help='Force push variables to gitlab.', action='store_true')
+    parser.add_argument('-f', '--file', type=str, default='.gitlab-ci-variables.yml')
+    parser.add_argument('-e', '--envs', nargs='+', help='Choose environment scope(s)', type=str)
+    parser.add_argument('-g', '--get', help='Fetch variables from GitLab.', action='store_true')
+    parser.add_argument('-p', '--push', help='Push variables to GitLab.', action='store_true')
+    parser.add_argument('--force', help='Force push (delete vars not in file)', action='store_true')
     parser.add_argument('-l', '--list', help='List environment scopes.', action='store_true')
-    # parser.add_argument('-j', '--json', help='Gen JSON varfile.', action='store_true')
 
     args = parser.parse_args()
     repo = Repo(os.getcwd())
@@ -148,11 +189,11 @@ def main():
 
     if args.envs and args.get:
         project.select_envs(args.envs)
-        project.gen_varfile_json()
+        project.gen_varfile_yaml()
     elif args.get:
-        project.gen_varfile_json()
+        project.gen_varfile_yaml()
     elif args.push:
-        project.parse_varfile_json(args.force)
+        project.parse_varfile_yaml(args.force)
         push_list = project.gen_push_list()
         project.push_vars(push_list)
     elif not len(sys.argv) > 1:
@@ -162,6 +203,7 @@ def main():
     elif args.envs:
         project.select_envs(args.envs)
         project.print_stdout_json()
+
 
 if __name__ == '__main__':
     main()
